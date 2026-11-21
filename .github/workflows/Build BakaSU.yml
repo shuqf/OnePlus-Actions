@@ -202,6 +202,15 @@ jobs:
           packages: python3 git curl ccache libelf-dev build-essential flex bison libssl-dev libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix
           execute_install_scripts: true
 
+      - name: "🔧 Ensure ccache is installed"
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ccache
+          command -v ccache
+          ccache --version
+          
       - name: "💾 Restore ccache (With SUSFS) | 恢复ccache缓存 (With SUSFS)"
         if: ${{ github.event.inputs.SUSFS == 'On' }}
         uses: actions/cache@v5
@@ -222,26 +231,19 @@ jobs:
             ccache-${{ runner.os }}-${{ github.event.inputs.FEIL }}-BakaSU-NoSUSFS
             ccache-${{ runner.os }}-BakaSU-NoSUSFS
 
-      - name: "⚙️ Initialize ccache | 初始化ccache"
+      - name: "⚙️ Initialize ccache"
+        shell: bash
         run: |
-          echo "🔧 正在初始化ccache..."
-          INIT_FLAG="${{ env.CCACHE_DIR }}/.ccache_initialized"
-          
-          if command -v ccache >/dev/null 2>&1; then
-            if [ ! -f "$INIT_FLAG" ]; then
-              mkdir -p "${{ env.CCACHE_DIR }}"
-              ccache -M ${{ env.CCACHE_MAXSIZE }}
-              touch "$INIT_FLAG"
-              echo "✅ ccache初始化完成"
-            else
-              echo "ℹ️ ccache已存在，跳过初始化"
-            fi
-          else
-            echo "⚠️ 未找到ccache命令，跳过初始化"
-          fi
-          # 显示缓存统计
+          set -euo pipefail
+
+          : "${CCACHE_DIR:=$HOME/.ccache}"
+          : "${CCACHE_MAXSIZE:=8G}"
+
+          mkdir -p "$CCACHE_DIR"
+
+          ccache -M "$CCACHE_MAXSIZE"
+          ccache -z
           ccache -s
-          echo "✅ ccache初始化流程完成"
 
       - name: "📥 Install Repo Tool | 安装Repo工具"
         run: |

@@ -484,6 +484,24 @@ jobs:
               exit 1
             fi
             patch -p1 --forward < "$SUSFS_PATCH_FILE"
+
+            # SukiSU builtin 4bec532 scopes KSU_NO_PREINIT to drivers/kernelsu.
+            # SUSFS also inserts preinit calls in fs/exec.c, so mirror the
+            # macro there when building this Android 12 / 5.10 target.
+            if [ "${{ github.event.inputs.ANDROID_VERSION }}" = "android12" ] && [ "${{ github.event.inputs.KERNEL_VERSION }}" = "5.10" ]; then
+              if ! grep -q '^#define KSU_NO_PREINIT' ./fs/exec.c; then
+                sed -i '1a#define KSU_NO_PREINIT' ./fs/exec.c
+              fi
+              grep -q '^#define KSU_NO_PREINIT' ./fs/exec.c || { echo "❌ 无法为 fs/exec.c 设置 KSU_NO_PREINIT"; exit 1; }
+
+              # Fail early if the pinned SUSFS priority UID filter files are incomplete.
+              grep -q 'CMD_SUSFS_SET_PRIORITY_UID_FILTER' ./include/linux/susfs_def.h || { echo "❌ SUSFS priority UID command 缺失"; exit 1; }
+              grep -q 'void susfs_set_priority_uid_filter' ./fs/susfs.c || { echo "❌ SUSFS priority UID handler 缺失"; exit 1; }
+              grep -q 'void susfs_parse_priority_app_strings' ./fs/susfs.c || { echo "❌ SUSFS priority UID parser 缺失"; exit 1; }
+              grep -q 'bool susfs_is_priority_uid_filtered' ./fs/susfs.c || { echo "❌ SUSFS priority UID filter implementation 缺失"; exit 1; }
+              echo "✅ 已屏蔽不适用于当前 SukiSU 构建的 SUSFS preinit 调用；priority UID filter 代码完整保留"
+            fi
+
             if find . -name '*.rej' -print -quit | grep -q .; then
               echo "❌ SUSFS 补丁产生 .rej 文件，停止编译以避免不完整集成"
               find . -name '*.rej' -print
@@ -578,6 +596,7 @@ jobs:
           if [ "${{ github.event.inputs.SUSFS }}" == "On" ]; then
             echo "📦 启用 SUSFS 功能..."
             echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ./common/arch/arm64/configs/gki_defconfig

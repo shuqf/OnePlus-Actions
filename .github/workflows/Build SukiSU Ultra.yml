@@ -325,8 +325,26 @@ jobs:
           cd kernel_workspace
 
           echo "⬇️ 克隆所需补丁..."
-          if [ "${{ github.event.inputs.SUSFS }}" == "On" ]; then          
-            git clone https://github.com/cctv18/susfs4oki.git -b oki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}
+          if [ "${{ github.event.inputs.SUSFS }}" == "On" ]; then
+          echo "⬇️ 正在下载官方 SUSFS 补丁..."
+
+          SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
+          SUSFS_BRANCH="gki-android12-5.10"
+
+          git clone --depth=1 \
+          --single-branch \
+          -b "$SUSFS_BRANCH" \
+          "$SUSFS_REPO" susfs4oki
+
+          echo "✅ SUSFS 下载完成"
+
+          SUSFS_PATCH="susfs4oki/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch"
+
+          if [ ! -f "$SUSFS_PATCH" ]; then
+          echo "❌ 找不到 SUSFS 补丁文件：$SUSFS_PATCH"
+          echo "检查远程仓库文件结构和补丁名称"
+          exit 1
+          fi
           fi
           git clone https://github.com/Xiaomichael/kernel_patches.git
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
@@ -334,11 +352,17 @@ jobs:
           cd kernel_platform
           echo "📝 复制补丁文件..."
           if [ "${{ github.event.inputs.SUSFS }}" == "On" ]; then
-            cp ../susfs4oki/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch ./common/
-            cp ../susfs4oki/kernel_patches/fs/* ./common/fs/
-            cp ../susfs4oki/kernel_patches/include/linux/* ./common/include/linux/
+          echo "📦 正在复制 SUSFS 补丁..."
+
+          cp ../susfs4oki/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch ./common/
+
+          cp ../susfs4oki/kernel_patches/fs/* ./common/fs/
+
+          cp ../susfs4oki/kernel_patches/include/linux/* ./common/include/linux/
+
+          echo "✅ SUSFS 补丁复制完成"
           else
-            cp ../kernel_patches/sukisu/scope_min_manual_hooks_v1.6.patch ./common/
+          cp ../kernel_patches/sukisu/scope_min_manual_hooks_v1.6.patch ./common/
           fi
           cp ../kernel_patches/zram_patches/001-lz4.patch ./common/
           cp ../kernel_patches/zram_patches/lz4armv8.S ./common/lib

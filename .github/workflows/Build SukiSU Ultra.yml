@@ -304,47 +304,59 @@ jobs:
               
       - name: "⚡ Setup SukiSU Ultra | 配置 SukiSU Ultra"
         run: |
+          set -euo pipefail
           cd kernel_workspace/kernel_platform
 
           # 下载并执行设置脚本
           echo "🛠️ 正在设置SukiSU Ultra..."
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/builtin/kernel/setup.sh" | bash -s builtin
-          
+          curl -fLSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/builtin/kernel/setup.sh" | bash -s builtin
+
+          if [ ! -d "KernelSU" ]; then
+            echo "❌ SukiSU 安装后没有生成 KernelSU 目录"
+            exit 1
+          fi
+
           cd KernelSU
           echo "⬇️ 下载SukiSU设置工具..."
-          curl -L -o sukisu_setup.bin https://github.com/Xiaomichael/OnePlus-Actions/raw/Build/script/sukisu_setup.bin
+          curl -fL -o sukisu_setup.bin https://github.com/Xiaomichael/OnePlus-Actions/raw/Build/script/sukisu_setup.bin
           chmod +x sukisu_setup.bin
-          
+
           ./sukisu_setup.bin
-          rm -rf ./sukisu_setup.bin
-          
+          rm -f ./sukisu_setup.bin
+
           echo "✅ SukiSU Ultra配置完成"
-          
+
       - name: "🔧 Setup Patches | 配置补丁"
         run: |
+          set -euo pipefail
           cd kernel_workspace
 
           echo "⬇️ 克隆所需补丁..."
           if [ "${{ github.event.inputs.SUSFS }}" == "On" ]; then
-          echo "⬇️ 正在下载官方 SUSFS 补丁..."
+            echo "⬇️ 正在下载 SUSFS 补丁..."
 
-          SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
-          SUSFS_BRANCH="gki-android12-5.10"
+            SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
+            SUSFS_BRANCH="gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}"
 
-          git clone --depth=1 \
-          --single-branch \
-          -b "$SUSFS_BRANCH" \
-          "$SUSFS_REPO" susfs4oki
+            # 保留分支历史，以便固定到与当前 SukiSU builtin 接口兼容的提交
+            git clone --single-branch -b "$SUSFS_BRANCH" "$SUSFS_REPO" susfs4oki
 
-          echo "✅ SUSFS 下载完成"
+            # 2026-10-19 之后的 SUSFS 提交新增了 KSU 接口调用；
+            # 当前 SukiSU Ultra builtin 不提供这些接口，因此 Android 12 / 5.10 固定到兼容提交。
+            if [ "${{ github.event.inputs.ANDROID_VERSION }}" = "android12" ] && [ "${{ github.event.inputs.KERNEL_VERSION }}" = "5.10" ]; then
+              SUSFS_COMMIT="31eb14ad"
+              git -C susfs4oki checkout --detach "$SUSFS_COMMIT"
+              echo "📌 SUSFS 固定版本：$(git -C susfs4oki rev-parse --short HEAD)"
+            fi
 
-          SUSFS_PATCH="susfs4oki/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch"
+            SUSFS_PATCH="susfs4oki/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch"
 
-          if [ ! -f "$SUSFS_PATCH" ]; then
-          echo "❌ 找不到 SUSFS 补丁文件：$SUSFS_PATCH"
-          echo "检查远程仓库文件结构和补丁名称"
-          exit 1
-          fi
+            if [ ! -f "$SUSFS_PATCH" ]; then
+              echo "❌ 找不到 SUSFS 补丁文件：$SUSFS_PATCH"
+              exit 1
+            fi
+
+            echo "✅ SUSFS 下载完成"
           fi
           git clone https://github.com/Xiaomichael/kernel_patches.git
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
@@ -354,7 +366,7 @@ jobs:
           if [ "${{ github.event.inputs.SUSFS }}" == "On" ]; then
           echo "📦 正在复制 SUSFS 补丁..."
 
-          cp ../susfs4oki/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch ./common/
+          cp ../susfs4oki/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch ./common/
 
           cp ../susfs4oki/kernel_patches/fs/* ./common/fs/
 
@@ -443,12 +455,6 @@ jobs:
                 fake_patched_expand=1
               fi
             fi
-            if [ "${{ github.event.inputs.ANDROID_VERSION }}" = "android12" ] && [ "${{ github.event.inputs.KERNEL_VERSION }}" = "5.10" ]; then
-              if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
-                echo "vma_pages Line not found. Fake Patching!"
-                fake_patched=1
-              fi
-            fi
             if [ "${{ github.event.inputs.ANDROID_VERSION }}" = "android13" ] && [ "${{ github.event.inputs.KERNEL_VERSION }}" = "5.15" ]; then
               if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
                 echo "vma_pages Line not found. Fake Patching!"
@@ -474,7 +480,13 @@ jobs:
               fi
             fi
             
-            patch -p1 < 50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch || true
+            patch -p1 --forward < 50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch
+
+            # 防止新版 SUSFS 再次引入当前 SukiSU builtin 不具备的 preinit 接口
+            if grep -q "ksu_setup_preinit_file" ./fs/exec.c; then
+              echo "❌ 当前 SUSFS 补丁仍引用 ksu_setup_preinit_file，与当前 SukiSU builtin 接口不兼容"
+              exit 1
+            fi
             
             # Revert Fake kernel patch
             if [ "$fake_patched_expand" = 1 ]; then
@@ -490,12 +502,6 @@ jobs:
                 if grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
                   echo "nr_subpages Line found. Revert Fake Patching!"
                   sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
-                fi
-              fi
-              if [ "${{ github.event.inputs.ANDROID_VERSION }}" = "android12" ] && [ "${{ github.event.inputs.KERNEL_VERSION }}" = "5.10" ]; then
-                if grep -qxF $'\t\t\tgoto show_pad;' ./fs/proc/task_mmu.c; then
-                  echo "vma_pages Line found. Revert Fake Patching!"
-                  sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
                 fi
               fi
               if [ "${{ github.event.inputs.ANDROID_VERSION }}" = "android13" ] && [ "${{ github.event.inputs.KERNEL_VERSION }}" = "5.15" ]; then

@@ -307,56 +307,54 @@ jobs:
           set -euo pipefail
           cd kernel_workspace/kernel_platform
 
-          # 下载并执行设置脚本
-          echo "🛠️ 正在设置SukiSU Ultra..."
-          curl -fLSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/builtin/kernel/setup.sh" | bash -s builtin
+          # 固定到已审计的 builtin 版本，避免 SukiSU 与 SUSFS 接口漂移
+          SUKISU_COMMIT="4bec532"
+          SUKISU_SETUP_URL="https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/builtin/kernel/setup.sh"
+          echo "🛠️ 正在安装 SukiSU Ultra，固定版本：${SUKISU_COMMIT}"
+          curl -fLSs "$SUKISU_SETUP_URL" | bash -s "$SUKISU_COMMIT"
 
-          if [ ! -d "KernelSU" ]; then
-            echo "❌ SukiSU 安装后没有生成 KernelSU 目录"
+          test -d KernelSU || { echo "❌ SukiSU KernelSU 目录不存在"; exit 1; }
+          cd KernelSU
+          ACTUAL_COMMIT="$(git rev-parse HEAD)"
+          EXPECTED_COMMIT="$(git rev-parse "${SUKISU_COMMIT}^{commit}")"
+          if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
+            echo "❌ SukiSU 版本固定失败：实际 ${ACTUAL_COMMIT}，预期 ${EXPECTED_COMMIT}"
             exit 1
           fi
+          echo "✅ SukiSU commit：$(git rev-parse --short HEAD)"
 
-          cd KernelSU
-          echo "⬇️ 下载SukiSU设置工具..."
-          curl -fL -o sukisu_setup.bin https://github.com/Xiaomichael/OnePlus-Actions/raw/Build/script/sukisu_setup.bin
+          echo "⬇️ 下载 SukiSU 设置工具..."
+          curl -fL -o sukisu_setup.bin "https://github.com/Xiaomichael/OnePlus-Actions/raw/Build/script/sukisu_setup.bin"
           chmod +x sukisu_setup.bin
-
           ./sukisu_setup.bin
           rm -f ./sukisu_setup.bin
 
-          echo "✅ SukiSU Ultra配置完成"
-
+          echo "✅ SukiSU Ultra 配置完成"
+          
       - name: "🔧 Setup Patches | 配置补丁"
         run: |
-          set -euo pipefail
           cd kernel_workspace
 
           echo "⬇️ 克隆所需补丁..."
           if [ "${{ github.event.inputs.SUSFS }}" == "On" ]; then
-            echo "⬇️ 正在下载 SUSFS 补丁..."
-
+            echo "⬇️ 正在下载官方 SUSFS 补丁..."
             SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
             SUSFS_BRANCH="gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}"
 
-            # 保留分支历史，以便固定到与当前 SukiSU builtin 接口兼容的提交
+            # Android 12 / 5.10 使用包含 priority UID filter 的已知版本
             git clone --single-branch -b "$SUSFS_BRANCH" "$SUSFS_REPO" susfs4oki
-
-            # 2026-10-19 之后的 SUSFS 提交新增了 KSU 接口调用；
-            # 当前 SukiSU Ultra builtin 不提供这些接口，因此 Android 12 / 5.10 固定到兼容提交。
             if [ "${{ github.event.inputs.ANDROID_VERSION }}" = "android12" ] && [ "${{ github.event.inputs.KERNEL_VERSION }}" = "5.10" ]; then
-              SUSFS_COMMIT="31eb14ad"
+              SUSFS_COMMIT="784ac9e6"
               git -C susfs4oki checkout --detach "$SUSFS_COMMIT"
-              echo "📌 SUSFS 固定版本：$(git -C susfs4oki rev-parse --short HEAD)"
+              echo "📌 SUSFS 固定 commit：$(git -C susfs4oki rev-parse --short HEAD)"
             fi
 
             SUSFS_PATCH="susfs4oki/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch"
-
             if [ ! -f "$SUSFS_PATCH" ]; then
               echo "❌ 找不到 SUSFS 补丁文件：$SUSFS_PATCH"
               exit 1
             fi
-
-            echo "✅ SUSFS 下载完成"
+            echo "✅ SUSFS 下载及版本检查完成"
           fi
           git clone https://github.com/Xiaomichael/kernel_patches.git
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
@@ -480,11 +478,15 @@ jobs:
               fi
             fi
             
-            patch -p1 --forward < 50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch
-
-            # 防止新版 SUSFS 再次引入当前 SukiSU builtin 不具备的 preinit 接口
-            if grep -q "ksu_setup_preinit_file" ./fs/exec.c; then
-              echo "❌ 当前 SUSFS 补丁仍引用 ksu_setup_preinit_file，与当前 SukiSU builtin 接口不兼容"
+            SUSFS_PATCH_FILE="50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch"
+            if [ ! -f "$SUSFS_PATCH_FILE" ]; then
+              echo "❌ SUSFS 补丁文件不存在：$SUSFS_PATCH_FILE"
+              exit 1
+            fi
+            patch -p1 --forward < "$SUSFS_PATCH_FILE"
+            if find . -name '*.rej' -print -quit | grep -q .; then
+              echo "❌ SUSFS 补丁产生 .rej 文件，停止编译以避免不完整集成"
+              find . -name '*.rej' -print
               exit 1
             fi
             
